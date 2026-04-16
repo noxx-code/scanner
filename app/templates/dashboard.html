@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard – Security Scanner</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Navigation bar -->
+  <nav class="navbar">
+    <div class="nav-brand">🔍 Security Scanner</div>
+    <div class="nav-right">
+      <span id="nav-username" class="nav-user"></span>
+      <button id="logout-btn" class="btn btn-sm btn-outline">Logout</button>
+    </div>
+  </nav>
+
+  <main class="dashboard">
+    <!-- New scan form -->
+    <section class="card scan-form-card">
+      <h2>Start New Scan</h2>
+      <div id="scan-error" class="alert alert-error hidden"></div>
+      <div id="scan-success" class="alert alert-success hidden"></div>
+      <form id="scan-form" class="scan-form">
+        <div class="form-row">
+          <div class="form-group flex-2">
+            <label for="target-url">Target URL</label>
+            <input type="url" id="target-url" name="target_url" required
+                   placeholder="https://example.com" />
+          </div>
+          <div class="form-group">
+            <label for="depth">Crawl Depth</label>
+            <select id="depth" name="depth">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div class="form-group form-group-btn">
+            <label>&nbsp;</label>
+            <button type="submit" class="btn btn-primary">Scan</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- Scans / reports table -->
+    <section class="card">
+      <div class="table-header">
+        <h2>Scan Reports</h2>
+        <button id="refresh-btn" class="btn btn-sm btn-outline">↻ Refresh</button>
+      </div>
+      <div id="loading" class="loading hidden">Loading…</div>
+      <div id="no-scans" class="empty-state hidden">No scans yet. Start one above!</div>
+      <div id="scans-table-wrapper" class="hidden">
+        <table class="scans-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Target URL</th>
+              <th>Depth</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Vulnerabilities</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="scans-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Vulnerability detail modal -->
+    <div id="vuln-modal" class="modal hidden">
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="modal-title">Vulnerabilities</h3>
+          <button class="modal-close" id="modal-close">&times;</button>
+        </div>
+        <div id="modal-body"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
