@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Crawler defaults
     default_crawl_depth: int = 2
     crawl_timeout: int = 10  # seconds per HTTP request
+    crawl_max_retries: int = 2
+    crawl_retry_backoff_seconds: float = 0.4
     api_common_endpoints: str = (
         "/api,/rest,/search,/graphql,/api/search,/api/products,/api/users,/rest/products/search"
     )
@@ -44,6 +46,10 @@ class Settings(BaseSettings):
 
     # Scanner defaults
     scanner_timeout: int = 12
+    scanner_max_retries: int = 2
+    scanner_retry_backoff_seconds: float = 0.4
+    scanner_requests_per_second: float = 8.0
+    scanner_max_concurrency: int = 30
     sqli_time_threshold_seconds: float = 2.5
 
     class Config:
