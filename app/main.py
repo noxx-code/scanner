@@ -1,22 +1,30 @@
 """
 Application entry point.
 
-Run with:
+Preferred run command:
     uvicorn app.main:app --reload
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.requests import Request
-from fastapi.responses import HTMLResponse
+
+if __package__ is None or __package__ == "":
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(project_root))
 
 from app.core.config import settings
 from app.db.database import init_db
 from app.routes import auth, report, scan
+
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +60,10 @@ app.add_middleware(
 )
 
 # Serve static files (CSS, JS)
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 # Jinja2 templates
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 # ---------------------------------------------------------------------------
 # Register API routers
