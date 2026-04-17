@@ -83,6 +83,14 @@ Key settings (all have sensible defaults):
 uvicorn app.main:app --reload
 ```
 
+If you prefer to execute Python directly, use:
+
+```bash
+python -m app.main
+```
+
+Avoid running `python app/main.py`; that treats the file as a script and breaks package imports because the project root is not added to `sys.path`.
+
 Open your browser at **http://localhost:8000**
 
 ---
