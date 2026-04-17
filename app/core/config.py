@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     # Crawler defaults
     default_crawl_depth: int = 2
     crawl_timeout: int = 10  # seconds per HTTP request
+    api_common_endpoints: str = (
+        "/api,/rest,/search,/graphql,/api/search,/api/products,/api/users,/rest/products/search"
+    )
+    api_bruteforce_enabled: bool = True
+    scan_json_endpoints: bool = True
+
+    # Scanner defaults
+    scanner_timeout: int = 12
+    sqli_time_threshold_seconds: float = 2.5
 
     class Config:
         env_file = PROJECT_ROOT / ".env"
