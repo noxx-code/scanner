@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import asyncio
 import logging
 import re
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -24,6 +24,36 @@ from bs4 import BeautifulSoup, Tag
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+REQUESTS_PER_SECOND = 5
+REQUEST_INTERVAL_SECONDS = 1.0 / REQUESTS_PER_SECOND
+SKIP_SCHEMES = ("mailto:", "javascript:", "tel:")
+STATIC_ASSET_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".ico",
+    ".css",
+    ".js",
+    ".mjs",
+    ".map",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".pdf",
+    ".zip",
+    ".rar",
+    ".7z",
+    ".mp4",
+    ".mp3",
+    ".avi",
+    ".mov",
+}
 
 
 @dataclass(frozen=True)
@@ -65,12 +95,22 @@ async def crawl(
     :return: CrawlResult with discovered pages and parameters.
     """
     result = CrawlResult()
-    base_domain = urlparse(target_url).netloc
+    normalized_start_url = _normalize_url(target_url)
+    start_parsed = urlparse(normalized_start_url)
+    base_domain = (start_parsed.hostname or "").lower()
+    if not base_domain:
+        logger.warning(
+            "Crawler aborted due to invalid start URL",
+            extra={"scan_id": scan_id, "target_url": target_url},
+        )
+        return result
+
     crawl_context = {"scan_id": scan_id, "target_url": target_url}
-    logger.info("Crawler started", extra=crawl_context)
+    logger.info("Crawler started", extra={**crawl_context, "base_domain": base_domain, "max_depth": depth})
 
     # BFS queue: (url, current_depth)
-    queue: deque[tuple[str, int]] = deque([(target_url, 0)])
+    queue: deque[tuple[str, int]] = deque([(normalized_start_url, 0)])
+    queued: set[str] = {normalized_start_url}
     visited: set[str] = set()
     target_keys: set[tuple[str, str, tuple[str, ...], str]] = set()
     discovered_api_paths: set[str] = set()
@@ -86,22 +126,66 @@ async def crawl(
     timeout = httpx.Timeout(settings.crawl_timeout)
     async with httpx.AsyncClient(
         timeout=timeout,
-        follow_redirects=True,
+        follow_redirects=False,
         # Pretend to be a regular browser to avoid trivial bot-blocks
         headers={"User-Agent": "SecurityScanner/1.0 (educational use)"},
     ) as client:
         while queue:
             url, current_depth = queue.popleft()
+            queued.discard(url)
+            logger.debug(
+                "Crawler dequeued URL",
+                extra={
+                    "scan_id": scan_id,
+                    "target_url": target_url,
+                    "url": url,
+                    "depth": current_depth,
+                    "queue_size": len(queue),
+                },
+            )
 
-            # Normalise URL (strip fragment)
-            url = url.split("#")[0].rstrip("/") or url
+            if current_depth > depth:
+                logger.debug(
+                    "Crawler skipped URL",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "depth": current_depth,
+                        "reason": "exceeds max depth",
+                    },
+                )
+                continue
+
+            url = _normalize_url(url)
             if url in visited:
+                logger.debug(
+                    "Crawler skipped URL",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "depth": current_depth,
+                        "reason": "already visited",
+                    },
+                )
                 continue
-            visited.add(url)
 
-            # Only crawl pages within the same domain
-            if urlparse(url).netloc != base_domain:
+            skip_reason = _skip_reason(url, base_domain)
+            if skip_reason:
+                logger.debug(
+                    "Crawler skipped URL",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "depth": current_depth,
+                        "reason": skip_reason,
+                    },
+                )
                 continue
+
+            visited.add(url)
 
             result.pages.append(url)
 
@@ -129,22 +213,91 @@ async def crawl(
             # Fetch the page and extract child links
             try:
                 response = await _get_with_retries(client, url, scan_id=scan_id, target_url=target_url)
-                if "text/html" not in response.headers.get("content-type", ""):
+                if 300 <= response.status_code < 400:
+                    logger.debug(
+                        "Crawler skipped URL",
+                        extra={
+                            "scan_id": scan_id,
+                            "target_url": target_url,
+                            "url": url,
+                            "depth": current_depth,
+                            "reason": "redirect response not followed",
+                            "status_code": response.status_code,
+                            "location": response.headers.get("location", ""),
+                        },
+                    )
                     continue
-                links = _extract_links(response.text, url)
+
+                content_type = response.headers.get("content-type", "").lower()
+                if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+                    logger.debug(
+                        "Crawler skipped URL",
+                        extra={
+                            "scan_id": scan_id,
+                            "target_url": target_url,
+                            "url": url,
+                            "depth": current_depth,
+                            "reason": "non-html response",
+                            "content_type": content_type,
+                        },
+                    )
+                    continue
+
+                links = _extract_links(response.text, url, base_domain)
                 forms = _extract_forms(response.text, url)
                 discovered_api_paths.update(_discover_api_paths(response.text))
             except (httpx.RequestError, httpx.HTTPStatusError, httpx.TimeoutException):
                 # Non-fatal: just skip unreachable pages
                 logger.warning(
                     "Crawler skipped unreachable page",
-                    extra={"scan_id": scan_id, "target_url": target_url, "url": url},
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "depth": current_depth,
+                    },
                 )
                 continue
 
             for link in links:
-                if link not in visited:
-                    queue.append((link, current_depth + 1))
+                if current_depth + 1 > depth:
+                    logger.debug(
+                        "Crawler skipped URL",
+                        extra={
+                            "scan_id": scan_id,
+                            "target_url": target_url,
+                            "url": link,
+                            "depth": current_depth + 1,
+                            "reason": "would exceed max depth",
+                        },
+                    )
+                    continue
+
+                if link in visited or link in queued:
+                    logger.debug(
+                        "Crawler skipped URL",
+                        extra={
+                            "scan_id": scan_id,
+                            "target_url": target_url,
+                            "url": link,
+                            "depth": current_depth + 1,
+                            "reason": "already visited or queued",
+                        },
+                    )
+                    continue
+
+                queue.append((link, current_depth + 1))
+                queued.add(link)
+                logger.debug(
+                    "Crawler queued URL",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": link,
+                        "depth": current_depth + 1,
+                        "queue_size": len(queue),
+                    },
+                )
 
             for form_target in forms:
                 _add_target(result, target_keys, form_target)
@@ -187,6 +340,8 @@ async def _get_with_retries(
             },
         )
         try:
+            # Fixed pacing keeps average rate around 5 requests/second.
+            await asyncio.sleep(REQUEST_INTERVAL_SECONDS)
             response = await client.get(url)
             return response
         except (httpx.RequestError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
@@ -206,7 +361,7 @@ async def _get_with_retries(
             await asyncio.sleep(delay)
 
 
-def _extract_links(html: str, base_url: str) -> list[str]:
+def _extract_links(html: str, base_url: str, base_domain: str) -> list[str]:
     """
     Parse *html* and return absolute internal links found in <a href="...">.
 
@@ -216,23 +371,72 @@ def _extract_links(html: str, base_url: str) -> list[str]:
     """
     soup = BeautifulSoup(html, "html.parser")
     links: list[str] = []
-    base_domain = urlparse(base_url).netloc
-
     for tag in soup.find_all("a", href=True):
         if not isinstance(tag, Tag):
             continue
         href = _attr_as_str(tag, "href").strip()
         if not href:
             continue
-        # Skip non-HTTP schemes (mailto, javascript, etc.)
-        if href.startswith(("mailto:", "javascript:", "tel:", "#")):
+
+        if href.startswith("#"):
             continue
-        absolute = urljoin(base_url, href).split("#")[0]
-        # Only keep links in the same domain
-        if urlparse(absolute).netloc == base_domain:
-            links.append(absolute)
+        if href.lower().startswith(SKIP_SCHEMES):
+            continue
+
+        absolute = _normalize_url(urljoin(base_url, href))
+        skip_reason = _skip_reason(absolute, base_domain)
+        if skip_reason:
+            continue
+        links.append(absolute)
 
     return links
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize URL for stable deduplication and queue management."""
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "http").lower()
+    hostname = (parsed.hostname or "").lower()
+
+    if not hostname:
+        return url.split("#", 1)[0].rstrip("/")
+
+    default_port = 80 if scheme == "http" else 443 if scheme == "https" else None
+    if parsed.port and parsed.port != default_port:
+        netloc = f"{hostname}:{parsed.port}"
+    else:
+        netloc = hostname
+
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+
+    normalized = parsed._replace(scheme=scheme, netloc=netloc, path=path, fragment="")
+    return normalized.geturl()
+
+
+def _skip_reason(url: str, base_domain: str) -> str | None:
+    """Return skip reason for URLs outside crawl scope; otherwise None."""
+    lowered = url.lower()
+    if lowered.startswith(SKIP_SCHEMES):
+        return "unsupported URL scheme"
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return "non-http URL"
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return "missing hostname"
+    if hostname != base_domain:
+        return "external domain"
+
+    path = parsed.path.lower()
+    for ext in STATIC_ASSET_EXTENSIONS:
+        if path.endswith(ext):
+            return "static asset URL"
+
+    return None
 
 
 def _extract_forms(html: str, page_url: str) -> list[AttackTarget]:
