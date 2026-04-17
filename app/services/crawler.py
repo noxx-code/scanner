@@ -2,21 +2,35 @@
 Web crawler service.
 
 Given a starting URL, the crawler discovers:
-  - Internal page URLs (links found in <a href="...">)
-  - Query parameters present in those URLs (GET parameters)
+    - Internal page URLs (links found in <a href="...">)
+    - Query parameters present in those URLs (GET parameters)
+    - HTML form inputs (<form>, <input>, <textarea>, <select>)
+    - Common API endpoints for JSON-aware scanning
 
 The crawl is breadth-first and respects a configurable maximum depth.
 External domains are skipped to keep the scope focused.
 """
 
-import asyncio
 from collections import deque
+from dataclasses import dataclass
+import re
 from urllib.parse import urljoin, urlparse, parse_qs
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from app.core.config import settings
+
+
+@dataclass(frozen=True)
+class AttackTarget:
+    """A structured input surface that can be fuzzed by the scanner."""
+
+    url: str
+    method: str
+    params: tuple[str, ...]
+    content_type: str  # query | form | json
+    source: str  # link-query | html-form | api-common | api-bruteforce | api-discovered
 
 
 class CrawlResult:
@@ -27,9 +41,17 @@ class CrawlResult:
         self.pages: list[str] = []
         # Mapping of {url: [param_name, ...]} for URLs that carry query params
         self.params: dict[str, list[str]] = {}
+        # Rich attack surfaces discovered during crawling
+        self.targets: list[AttackTarget] = []
 
 
-async def crawl(target_url: str, depth: int = settings.default_crawl_depth) -> CrawlResult:
+async def crawl(
+    target_url: str,
+    depth: int = settings.default_crawl_depth,
+    include_api: bool = True,
+    brute_force_api: bool = False,
+    api_paths: list[str] | None = None,
+) -> CrawlResult:
     """
     Crawl *target_url* up to *depth* levels deep.
 
@@ -43,6 +65,16 @@ async def crawl(target_url: str, depth: int = settings.default_crawl_depth) -> C
     # BFS queue: (url, current_depth)
     queue: deque[tuple[str, int]] = deque([(target_url, 0)])
     visited: set[str] = set()
+    target_keys: set[tuple[str, str, tuple[str, ...], str]] = set()
+    discovered_api_paths: set[str] = set()
+
+    # Seed common API endpoints (configurable + optional brute-force additions)
+    if include_api:
+        configured_paths = api_paths or _parse_config_api_paths(settings.api_common_endpoints)
+        for path in configured_paths:
+            discovered_api_paths.add(path)
+        if brute_force_api:
+            discovered_api_paths.update(_default_api_bruteforce_paths())
 
     async with httpx.AsyncClient(
         timeout=settings.crawl_timeout,
@@ -70,6 +102,17 @@ async def crawl(target_url: str, depth: int = settings.default_crawl_depth) -> C
             if parsed.query:
                 params = list(parse_qs(parsed.query).keys())
                 result.params[url] = params
+                _add_target(
+                    result,
+                    target_keys,
+                    AttackTarget(
+                        url=url,
+                        method="GET",
+                        params=tuple(params),
+                        content_type="query",
+                        source="link-query",
+                    ),
+                )
 
             # Stop descending beyond the requested depth
             if current_depth >= depth:
@@ -81,6 +124,8 @@ async def crawl(target_url: str, depth: int = settings.default_crawl_depth) -> C
                 if "text/html" not in response.headers.get("content-type", ""):
                     continue
                 links = _extract_links(response.text, url)
+                forms = _extract_forms(response.text, url)
+                discovered_api_paths.update(_discover_api_paths(response.text))
             except (httpx.RequestError, httpx.HTTPStatusError):
                 # Non-fatal: just skip unreachable pages
                 continue
@@ -88,6 +133,16 @@ async def crawl(target_url: str, depth: int = settings.default_crawl_depth) -> C
             for link in links:
                 if link not in visited:
                     queue.append((link, current_depth + 1))
+
+            for form_target in forms:
+                _add_target(result, target_keys, form_target)
+                if form_target.method == "GET":
+                    # Keep backwards-compatible map used by older scan code paths.
+                    result.params.setdefault(form_target.url, list(form_target.params))
+
+    if include_api:
+        for api_target in _build_api_targets(target_url, discovered_api_paths, brute_force_api):
+            _add_target(result, target_keys, api_target)
 
     return result
 
@@ -105,7 +160,11 @@ def _extract_links(html: str, base_url: str) -> list[str]:
     base_domain = urlparse(base_url).netloc
 
     for tag in soup.find_all("a", href=True):
-        href = tag["href"].strip()
+        if not isinstance(tag, Tag):
+            continue
+        href = _attr_as_str(tag, "href").strip()
+        if not href:
+            continue
         # Skip non-HTTP schemes (mailto, javascript, etc.)
         if href.startswith(("mailto:", "javascript:", "tel:", "#")):
             continue
@@ -115,3 +174,161 @@ def _extract_links(html: str, base_url: str) -> list[str]:
             links.append(absolute)
 
     return links
+
+
+def _extract_forms(html: str, page_url: str) -> list[AttackTarget]:
+    """Parse HTML forms and build form attack targets."""
+    soup = BeautifulSoup(html, "html.parser")
+    targets: list[AttackTarget] = []
+
+    for form in soup.find_all("form"):
+        if not isinstance(form, Tag):
+            continue
+
+        action = _attr_as_str(form, "action").strip()
+        method = (_attr_as_str(form, "method") or "GET").upper()
+        if method not in {"GET", "POST"}:
+            method = "POST"
+
+        target_url = urljoin(page_url, action) if action else page_url
+        params: list[str] = []
+
+        for field in form.find_all(["input", "textarea", "select"]):
+            if not isinstance(field, Tag):
+                continue
+            name = _attr_as_str(field, "name").strip()
+            if name:
+                params.append(name)
+
+        deduped = tuple(dict.fromkeys(params))
+        if not deduped:
+            continue
+
+        targets.append(
+            AttackTarget(
+                url=target_url,
+                method=method,
+                params=deduped,
+                content_type="form",
+                source="html-form",
+            )
+        )
+
+    return targets
+
+
+def _discover_api_paths(html: str) -> set[str]:
+    """Extract API-like paths from inline scripts and HTML attributes."""
+    # Conservative path matcher: /api, /rest, /search, /v1/items etc.
+    pattern = re.compile(r'(["\'])(/(?:api|rest|search|graphql|v\d+)[^"\'\s<>]*)\1', re.IGNORECASE)
+    discovered: set[str] = set()
+    for match in pattern.finditer(html):
+        path = match.group(2).strip()
+        if path:
+            discovered.add(path)
+    return discovered
+
+
+def _parse_config_api_paths(raw_paths: str) -> list[str]:
+    """Parse comma-separated endpoint seeds from settings."""
+    parsed: list[str] = []
+    for piece in raw_paths.split(","):
+        p = piece.strip()
+        if not p:
+            continue
+        parsed.append(p if p.startswith("/") else f"/{p}")
+    return parsed
+
+
+def _default_api_bruteforce_paths() -> set[str]:
+    """Small endpoint wordlist used when brute-force mode is enabled."""
+    return {
+        "/api",
+        "/api/v1",
+        "/api/v2",
+        "/api/search",
+        "/api/products",
+        "/api/users",
+        "/api/login",
+        "/rest",
+        "/rest/products/search",
+        "/rest/user/login",
+        "/search",
+        "/graphql",
+    }
+
+
+def _build_api_targets(
+    base_url: str,
+    api_paths: set[str],
+    brute_force_enabled: bool,
+) -> list[AttackTarget]:
+    """Create GET/POST-JSON attack targets from discovered API paths."""
+    base_domain = urlparse(base_url).netloc
+    targets: list[AttackTarget] = []
+
+    for path in api_paths:
+        absolute = urljoin(base_url, path)
+        if urlparse(absolute).netloc != base_domain:
+            continue
+
+        source = "api-bruteforce" if brute_force_enabled and path in _default_api_bruteforce_paths() else "api-common"
+        if path not in _default_api_bruteforce_paths() and path not in _parse_config_api_paths(settings.api_common_endpoints):
+            source = "api-discovered"
+
+        # Query-style probing
+        targets.append(
+            AttackTarget(
+                url=absolute,
+                method="GET",
+                params=("q", "search", "id", "term"),
+                content_type="query",
+                source=source,
+            )
+        )
+
+        # JSON body probing
+        if settings.scan_json_endpoints:
+            targets.append(
+                AttackTarget(
+                    url=absolute,
+                    method="POST",
+                    params=("q", "search", "id", "email", "password"),
+                    content_type="json",
+                    source=source,
+                )
+            )
+
+    return targets
+
+
+def _add_target(
+    result: CrawlResult,
+    seen: set[tuple[str, str, tuple[str, ...], str]],
+    target: AttackTarget,
+) -> None:
+    """Deduplicate targets while preserving insertion order."""
+    params = tuple(dict.fromkeys(target.params))
+    key = (target.method, target.url, params, target.content_type)
+    if key in seen or not params:
+        return
+    seen.add(key)
+    result.targets.append(
+        AttackTarget(
+            url=target.url,
+            method=target.method,
+            params=params,
+            content_type=target.content_type,
+            source=target.source,
+        )
+    )
+
+
+def _attr_as_str(tag: Tag, name: str) -> str:
+    """Read a BeautifulSoup attribute as a normalized string."""
+    value = tag.get(name)
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value)
+    return str(value)
