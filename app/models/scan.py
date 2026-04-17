@@ -65,7 +65,7 @@ class Vulnerability(Base):
     __tablename__ = "vulnerabilities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id"), nullable=False)
+    scan_id: Mapped[int] = mapped_column(ForeignKey("scans.id", ondelete="CASCADE"), nullable=False)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     parameter: Mapped[str] = mapped_column(String(256), nullable=False)
     vuln_type: Mapped[str] = mapped_column(String(64), nullable=False)  # e.g. "XSS", "SQLi"
