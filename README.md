@@ -7,9 +7,9 @@ A minimal viable web application for basic security scanning, built with **FastA
 ## Features
 
 - **Authentication** — Register, login, logout with bcrypt password hashing and JWT tokens; brute-force protection (account locked after 5 failed attempts in 5 minutes)
-- **Web Crawler** — BFS crawler that discovers internal pages and query parameters up to a configurable depth (max 5)
-- **Vulnerability Scanner** — Checks discovered parameters for reflected XSS and error-based SQL injection
-- **Reporting Dashboard** — Clean HTML/JS frontend showing scan history, status badges, vulnerability counts, and a detail modal
+- **Web Crawler** — BFS crawler that discovers internal pages, query parameters, HTML forms, and common API endpoints up to a configurable depth (max 5)
+- **Vulnerability Scanner** — Tests GET/POST/query/form/JSON inputs for reflected XSS, SQLi error signatures, and basic time-based SQLi behavior
+- **Reporting Dashboard** — HTML/JS dashboard with scan history, vulnerability details modal, and one-click report deletion
 
 ---
 
@@ -29,11 +29,11 @@ app/
 ├── routes/
 │   ├── auth.py           # POST /auth/register  POST /auth/login  GET /auth/me
 │   ├── scan.py           # POST /scan           GET /scan/{id}
-│   ├── report.py         # GET /reports         GET /reports/{id}
+│   ├── report.py         # GET /reports         GET /reports/{id}  DELETE /reports/{id}
 │   └── dependencies.py   # Shared FastAPI deps (get_current_user)
 ├── services/
-│   ├── crawler.py        # Async BFS web crawler
-│   └── scanner.py        # XSS & SQLi payload testing
+│   ├── crawler.py        # Async BFS crawler + form/API target discovery
+│   └── scanner.py        # XSS/SQLi checks across query/form/json surfaces
 ├── templates/            # Jinja2 HTML templates
 │   ├── index.html        # Landing page
 │   ├── login.html        # Login form
@@ -76,6 +76,10 @@ Key settings (all have sensible defaults):
 | `DATABASE_URL` | `sqlite+aiosqlite:///./scanner.db` | Database location |
 | `DEFAULT_CRAWL_DEPTH` | `2` | Default crawler depth |
 | `MAX_LOGIN_ATTEMPTS` | `5` | Brute-force threshold |
+| `API_COMMON_ENDPOINTS` | `/api,/rest,...` | Seed list for API endpoint probing |
+| `API_BRUTEFORCE_ENABLED` | `true` | Enables basic API endpoint brute-force checks |
+| `SCAN_JSON_ENDPOINTS` | `true` | Enables JSON-body scanning for API targets |
+| `SQLI_TIME_THRESHOLD_SECONDS` | `2.5` | Threshold for time-based SQLi heuristics |
 
 ### 3. Run the application
 
@@ -119,6 +123,7 @@ Open your browser at **http://localhost:8000**
 |---|---|---|---|
 | `GET` | `/reports` | Bearer | List all scans for the current user |
 | `GET` | `/reports/{id}` | Bearer | Full report for one scan |
+| `DELETE` | `/reports/{id}` | Bearer | Delete one scan report and related vulnerabilities |
 
 Interactive docs: **http://localhost:8000/docs**
 
