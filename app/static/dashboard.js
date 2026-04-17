@@ -83,11 +83,6 @@ async function loadReports() {
     tbody.innerHTML = scans.map(renderScanRow).join("");
     tableWrapper.classList.remove("hidden");
 
-    // Re-attach detail button listeners
-    document.querySelectorAll(".view-vulns-btn").forEach((btn) => {
-      btn.addEventListener("click", () => openVulnModal(btn.dataset.scanId, btn.dataset.targetUrl));
-    });
-
     // Auto-refresh if any scan is still running
     const hasRunning = scans.some((s) => s.status === "running" || s.status === "pending");
     if (hasRunning) {
@@ -103,9 +98,11 @@ function renderScanRow(scan) {
   const created = new Date(scan.created_at).toLocaleString();
   const vulnCount = scan.vulnerabilities ? scan.vulnerabilities.length : 0;
   const badge = `<span class="badge badge-${scan.status}">${scan.status}</span>`;
-  const detailBtn = `<button class="btn btn-sm btn-outline view-vulns-btn"
+    const detailBtn = `<button type="button" class="btn btn-sm btn-outline view-vulns-btn"
       data-scan-id="${scan.id}"
       data-target-url="${escHtml(scan.target_url)}">Details</button>`;
+    const deleteBtn = `<button type="button" class="btn btn-sm btn-danger delete-scan-btn"
+      data-scan-id="${scan.id}">Delete</button>`;
   return `<tr>
     <td>${scan.id}</td>
     <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
@@ -114,8 +111,90 @@ function renderScanRow(scan) {
     <td>${badge}</td>
     <td>${created}</td>
     <td>${vulnCount > 0 ? `<span style="color:var(--danger);font-weight:700;">${vulnCount}</span>` : "0"}</td>
-    <td>${detailBtn}</td>
+    <td style="display:flex;gap:8px;flex-wrap:wrap;">${detailBtn}${deleteBtn}</td>
   </tr>`;
+}
+
+async function deleteScan(scanId) {
+  const ok = window.confirm(`Delete report #${scanId}? This cannot be undone.`);
+  if (!ok) return;
+
+  try {
+    const res = await fetch(`${API}/reports/${scanId}`, {
+      method: "DELETE",
+      headers: authHeaders,
+    });
+
+    if (!res.ok) {
+      let message = "Failed to delete report.";
+      try {
+        const data = await res.json();
+        if (res.status === 403) {
+          message = "You do not have permission to delete this report.";
+        } else if (res.status === 404) {
+          message = "This report no longer exists.";
+        } else {
+          message = data.detail || message;
+        }
+      } catch {
+        // keep fallback message
+      }
+      showDashboardError(message);
+      return;
+    }
+
+    const row = document.querySelector(`.delete-scan-btn[data-scan-id="${scanId}"]`)?.closest("tr");
+    if (row) row.remove();
+
+    const tbody = document.getElementById("scans-tbody");
+    if (!tbody.querySelector("tr")) {
+      document.getElementById("scans-table-wrapper").classList.add("hidden");
+      document.getElementById("no-scans").classList.remove("hidden");
+    }
+
+    showDashboardSuccess(`Report #${scanId} deleted.`);
+  } catch {
+    showDashboardError("Network error while deleting report. Please try again.");
+  }
+}
+
+function setupTableActions() {
+  const tbody = document.getElementById("scans-tbody");
+  if (!tbody || tbody.dataset.actionsBound === "1") return;
+
+  tbody.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+
+    const detailBtn = target.closest(".view-vulns-btn");
+    if (detailBtn instanceof HTMLElement) {
+      openVulnModal(detailBtn.dataset.scanId, detailBtn.dataset.targetUrl);
+      return;
+    }
+
+    const deleteBtn = target.closest(".delete-scan-btn");
+    if (deleteBtn instanceof HTMLElement) {
+      deleteScan(deleteBtn.dataset.scanId);
+    }
+  });
+
+  tbody.dataset.actionsBound = "1";
+}
+
+function showDashboardError(message) {
+  const errEl = document.getElementById("scan-error");
+  const okEl = document.getElementById("scan-success");
+  okEl.classList.add("hidden");
+  errEl.textContent = message;
+  errEl.classList.remove("hidden");
+}
+
+function showDashboardSuccess(message) {
+  const errEl = document.getElementById("scan-error");
+  const okEl = document.getElementById("scan-success");
+  errEl.classList.add("hidden");
+  okEl.textContent = message;
+  okEl.classList.remove("hidden");
 }
 
 // ---------------------------------------------------------------------------
@@ -228,4 +307,5 @@ function escHtml(str) {
 // ---------------------------------------------------------------------------
 // Initial load
 // ---------------------------------------------------------------------------
+setupTableActions();
 loadReports();
