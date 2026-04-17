@@ -56,9 +56,30 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 // Load reports
 // ---------------------------------------------------------------------------
-let autoRefreshTimer = null;
+const POLL_INTERVAL_MS = 7000;
+let pollingIntervalId = null;
+let isLoadingReports = false;
+
+function stopPolling() {
+  if (pollingIntervalId !== null) {
+    clearInterval(pollingIntervalId);
+    pollingIntervalId = null;
+  }
+}
+
+function startPolling() {
+  // Always reset first so there is only one active interval.
+  stopPolling();
+  pollingIntervalId = setInterval(() => {
+    if (document.hidden) return;
+    loadReports();
+  }, POLL_INTERVAL_MS);
+}
 
 async function loadReports() {
+  if (isLoadingReports) return;
+  isLoadingReports = true;
+
   const loading       = document.getElementById("loading");
   const noScans       = document.getElementById("no-scans");
   const tableWrapper  = document.getElementById("scans-table-wrapper");
@@ -76,6 +97,7 @@ async function loadReports() {
     loading.classList.add("hidden");
 
     if (scans.length === 0) {
+      stopPolling();
       noScans.classList.remove("hidden");
       return;
     }
@@ -83,14 +105,17 @@ async function loadReports() {
     tbody.innerHTML = scans.map(renderScanRow).join("");
     tableWrapper.classList.remove("hidden");
 
-    // Auto-refresh if any scan is still running
+    // Smart polling: only poll while work is still in progress.
     const hasRunning = scans.some((s) => s.status === "running" || s.status === "pending");
-    if (hasRunning) {
-      clearTimeout(autoRefreshTimer);
-      autoRefreshTimer = setTimeout(loadReports, 5000);
+    if (hasRunning && !document.hidden) {
+      startPolling();
+    } else {
+      stopPolling();
     }
   } catch {
     loading.classList.add("hidden");
+  } finally {
+    isLoadingReports = false;
   }
 }
 
@@ -238,6 +263,19 @@ document.getElementById("scan-form").addEventListener("submit", async (e) => {
 // Refresh button
 // ---------------------------------------------------------------------------
 document.getElementById("refresh-btn").addEventListener("click", loadReports);
+
+// Pause polling when tab is hidden; re-check scan state when visible again.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopPolling();
+    return;
+  }
+  loadReports();
+});
+
+// Ensure polling is cleaned up when leaving the page.
+window.addEventListener("pagehide", stopPolling);
+window.addEventListener("beforeunload", stopPolling);
 
 // ---------------------------------------------------------------------------
 // Vulnerability modal
