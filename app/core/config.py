@@ -5,7 +5,12 @@ Settings are loaded from environment variables with sensible defaults
 so the app can run out of the box for local development.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -33,7 +38,7 @@ class Settings(BaseSettings):
     crawl_timeout: int = 10  # seconds per HTTP request
 
     class Config:
-        env_file = ".env"
+        env_file = PROJECT_ROOT / ".env"
         env_file_encoding = "utf-8"
 
 
