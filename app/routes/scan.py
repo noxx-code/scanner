@@ -9,6 +9,7 @@ GET  /scan/{scan_id}    — retrieve a scan and its vulnerabilities
 
 import asyncio
 from datetime import datetime, timezone
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel, HttpUrl, field_validator
@@ -25,6 +26,7 @@ from app.services.crawler import crawl
 from app.services.scanner import scan_targets
 
 router = APIRouter(prefix="/scan", tags=["scan"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -90,16 +92,22 @@ async def _run_scan(scan_id: int) -> None:
         await db.commit()
 
         try:
+            logger.info("Scan job started", extra={"scan_id": scan.id, "target_url": scan.target_url})
             # Step 1: Crawl
             crawl_result = await crawl(
                 scan.target_url,
                 depth=scan.depth,
                 include_api=True,
                 brute_force_api=settings.api_bruteforce_enabled,
+                scan_id=scan.id,
             )
 
             # Step 2: Scan discovered attack surfaces for vulnerabilities
-            findings = await scan_targets(crawl_result.targets)
+            findings = await scan_targets(
+                crawl_result.targets,
+                scan_id=scan.id,
+                target_url=scan.target_url,
+            )
 
             # Step 3: Persist findings
             for finding in findings:
@@ -114,9 +122,18 @@ async def _run_scan(scan_id: int) -> None:
                 db.add(vuln)
 
             scan.status = ScanStatus.completed
+            logger.info(
+                "Scan job completed",
+                extra={"scan_id": scan.id, "target_url": scan.target_url, "findings": len(findings)},
+            )
         except Exception as exc:  # noqa: BLE001
             scan.status = ScanStatus.failed
             scan.error_message = str(exc)
+            logger.exception(
+                "Scan job failed",
+                exc_info=exc,
+                extra={"scan_id": scan.id, "target_url": scan.target_url},
+            )
 
         scan.completed_at = datetime.now(timezone.utc)
         await db.commit()
