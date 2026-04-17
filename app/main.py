@@ -20,8 +20,12 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(project_root))
 
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 from app.db.database import init_db
 from app.routes import auth, report, scan
+
+
+setup_logging()
 
 
 BASE_DIR = Path(__file__).resolve().parent
