@@ -5,6 +5,7 @@ Endpoints
 ---------
 GET /reports            — list all scans belonging to the current user
 GET /reports/{scan_id}  — detailed report for a single scan (alias for GET /scan/{id})
+DELETE /reports/{scan_id} — delete one report and related vulnerabilities
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.database import get_db
-from app.models.scan import Scan, Vulnerability
+from app.models.scan import Scan
 from app.models.user import User
 from app.routes.dependencies import get_current_user
-from app.routes.scan import ScanOut, VulnerabilityOut
+from app.routes.scan import ScanOut
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -52,3 +53,21 @@ async def get_report(
     if scan is None or scan.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
     return scan
+
+
+@router.delete("/{scan_id}")
+async def delete_report(
+    scan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete one report. Returns 403 if it belongs to another user."""
+    scan = await db.get(Scan, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+    if scan.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden.")
+
+    await db.delete(scan)
+    await db.commit()
+    return {"detail": "Report deleted."}
