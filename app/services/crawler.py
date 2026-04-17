@@ -13,6 +13,8 @@ External domains are skipped to keep the scope focused.
 
 from collections import deque
 from dataclasses import dataclass
+import asyncio
+import logging
 import re
 from urllib.parse import urljoin, urlparse, parse_qs
 
@@ -20,6 +22,8 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ async def crawl(
     include_api: bool = True,
     brute_force_api: bool = False,
     api_paths: list[str] | None = None,
+    scan_id: int | None = None,
 ) -> CrawlResult:
     """
     Crawl *target_url* up to *depth* levels deep.
@@ -61,6 +66,8 @@ async def crawl(
     """
     result = CrawlResult()
     base_domain = urlparse(target_url).netloc
+    crawl_context = {"scan_id": scan_id, "target_url": target_url}
+    logger.info("Crawler started", extra=crawl_context)
 
     # BFS queue: (url, current_depth)
     queue: deque[tuple[str, int]] = deque([(target_url, 0)])
@@ -76,8 +83,9 @@ async def crawl(
         if brute_force_api:
             discovered_api_paths.update(_default_api_bruteforce_paths())
 
+    timeout = httpx.Timeout(settings.crawl_timeout)
     async with httpx.AsyncClient(
-        timeout=settings.crawl_timeout,
+        timeout=timeout,
         follow_redirects=True,
         # Pretend to be a regular browser to avoid trivial bot-blocks
         headers={"User-Agent": "SecurityScanner/1.0 (educational use)"},
@@ -120,14 +128,18 @@ async def crawl(
 
             # Fetch the page and extract child links
             try:
-                response = await client.get(url)
+                response = await _get_with_retries(client, url, scan_id=scan_id, target_url=target_url)
                 if "text/html" not in response.headers.get("content-type", ""):
                     continue
                 links = _extract_links(response.text, url)
                 forms = _extract_forms(response.text, url)
                 discovered_api_paths.update(_discover_api_paths(response.text))
-            except (httpx.RequestError, httpx.HTTPStatusError):
+            except (httpx.RequestError, httpx.HTTPStatusError, httpx.TimeoutException):
                 # Non-fatal: just skip unreachable pages
+                logger.warning(
+                    "Crawler skipped unreachable page",
+                    extra={"scan_id": scan_id, "target_url": target_url, "url": url},
+                )
                 continue
 
             for link in links:
@@ -144,7 +156,54 @@ async def crawl(
         for api_target in _build_api_targets(target_url, discovered_api_paths, brute_force_api):
             _add_target(result, target_keys, api_target)
 
+    logger.info(
+        "Crawler finished",
+        extra={
+            "scan_id": scan_id,
+            "target_url": target_url,
+            "pages": len(result.pages),
+            "targets": len(result.targets),
+        },
+    )
     return result
+
+
+async def _get_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    scan_id: int | None,
+    target_url: str,
+) -> httpx.Response:
+    """GET with retry/backoff to avoid transient failures aborting crawl."""
+    max_attempts = max(1, settings.crawl_max_retries + 1)
+    for attempt in range(1, max_attempts + 1):
+        logger.debug(
+            "Crawler request attempt",
+            extra={
+                "scan_id": scan_id,
+                "target_url": target_url,
+                "url": url,
+                "attempt": attempt,
+            },
+        )
+        try:
+            response = await client.get(url)
+            return response
+        except (httpx.RequestError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            if attempt >= max_attempts:
+                logger.error(
+                    "Crawler request failed after retries",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "attempt": attempt,
+                        "error": str(exc),
+                    },
+                )
+                raise
+            delay = settings.crawl_retry_backoff_seconds * (2 ** (attempt - 1))
+            await asyncio.sleep(delay)
 
 
 def _extract_links(html: str, base_url: str) -> list[str]:
