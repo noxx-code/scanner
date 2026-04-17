@@ -12,11 +12,14 @@ All payloads are chosen to be *diagnostic only* — they do not modify data.
 """
 
 import asyncio
-from urllib.parse import urlencode, urljoin, urlparse, parse_qs, urlunparse
+import time
+from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
 
 import httpx
 
+from app.core.config import settings
 from app.models.scan import Severity
+from app.services.crawler import AttackTarget
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +31,9 @@ from app.models.scan import Severity
 XSS_PAYLOADS: list[tuple[str, str]] = [
     ("<scannertag>xsstest</scannertag>", "Reflected XSS canary tag"),
     ("'\"><scannertag>", "Reflected XSS quote-break canary"),
+    ("<img src=x onerror=alert('xss')>", "HTML attribute injection probe"),
+    ("<svg/onload=alert('xss')>", "SVG onload probe"),
+    ("</script><script>alert('xss')</script>", "Script context break-out probe"),
 ]
 
 # SQLi: classic single-quote + boolean payloads that provoke DB errors.
@@ -35,6 +41,14 @@ SQLI_PAYLOADS: list[tuple[str, str]] = [
     ("'", "Single-quote SQLi probe"),
     ("1' OR '1'='1", "Boolean-based SQLi probe"),
     ("1; --", "Comment-based SQLi probe"),
+    ("' OR 1=1--", "Classic auth bypass style probe"),
+    ("') OR ('1'='1", "Parenthesis balance probe"),
+]
+
+SQLI_TIME_PAYLOADS: list[tuple[str, str, float]] = [
+    ("1' OR SLEEP(5)--", "MySQL time-based probe", 5.0),
+    ("1'; WAITFOR DELAY '0:0:5'--", "MSSQL time-based probe", 5.0),
+    ("1' OR pg_sleep(5)--", "PostgreSQL time-based probe", 5.0),
 ]
 
 # Keywords that appear in common database error messages.
@@ -48,6 +62,10 @@ SQLI_ERROR_SIGNATURES: list[str] = [
     "quoted string not properly terminated",
     "pg::syntaxerror",
     "sqlexception",
+    "you have an error in your sql syntax",
+    "sqlstate",
+    "pdoexception",
+    "database error",
 ]
 
 
@@ -80,26 +98,28 @@ class Finding:
 
 
 async def scan_targets(
-    pages_with_params: dict[str, list[str]],
+    targets: list[AttackTarget] | dict[str, list[str]],
 ) -> list[Finding]:
     """
     Scan each URL+parameter combination for XSS and SQL injection.
 
-    :param pages_with_params: Mapping of {url: [param_name, ...]} as returned
-                              by the crawler.
+    :param targets: List of AttackTarget objects discovered by crawler.
+                    Legacy dict input is still supported for compatibility.
     :return: List of Finding objects describing discovered vulnerabilities.
     """
     findings: list[Finding] = []
 
+    prepared_targets = _normalise_targets(targets)
+
     async with httpx.AsyncClient(
-        timeout=10,
+        timeout=settings.scanner_timeout,
         follow_redirects=True,
         headers={"User-Agent": "SecurityScanner/1.0 (educational use)"},
     ) as client:
         tasks = []
-        for url, params in pages_with_params.items():
-            for param in params:
-                tasks.append(_test_parameter(client, url, param))
+        for target in prepared_targets:
+            for param in target.params:
+                tasks.append(_test_parameter(client, target, param))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
@@ -115,12 +135,12 @@ async def scan_targets(
 
 
 async def _test_parameter(
-    client: httpx.AsyncClient, url: str, param: str
+    client: httpx.AsyncClient, target: AttackTarget, param: str
 ) -> list[Finding]:
     """Run all checks for a single URL + parameter combination."""
     findings: list[Finding] = []
-    findings.extend(await _check_xss(client, url, param))
-    findings.extend(await _check_sqli(client, url, param))
+    findings.extend(await _check_xss(client, target, param))
+    findings.extend(await _check_sqli(client, target, param))
     return findings
 
 
@@ -137,8 +157,68 @@ def _inject_param(url: str, param: str, value: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
+def _normalise_targets(targets: list[AttackTarget] | dict[str, list[str]]) -> list[AttackTarget]:
+    """Convert legacy crawler output to rich attack targets when needed."""
+    if isinstance(targets, dict):
+        return [
+            AttackTarget(
+                url=url,
+                method="GET",
+                params=tuple(params),
+                content_type="query",
+                source="legacy-query",
+            )
+            for url, params in targets.items()
+        ]
+    return targets
+
+
+def _build_base_payload(target: AttackTarget) -> dict[str, str]:
+    """Create a baseline payload map with neutral values for all params."""
+    return {name: "1" for name in target.params}
+
+
+def _build_probe_request(
+    target: AttackTarget,
+    param: str,
+    payload: str,
+) -> tuple[str, str, dict[str, dict[str, str]]]:
+    """Build request method/url/kwargs based on target content type."""
+    method = target.method.upper()
+    base_payload = _build_base_payload(target)
+    base_payload[param] = payload
+
+    if target.content_type == "query" or method == "GET":
+        if target.content_type == "query":
+            url = _inject_param(target.url, param, payload)
+            return method, url, {}
+        return method, target.url, {"params": base_payload}
+
+    if target.content_type == "json":
+        return method, target.url, {"json": base_payload}
+
+    return method, target.url, {"data": base_payload}
+
+
+async def _send_probe(
+    client: httpx.AsyncClient,
+    target: AttackTarget,
+    param: str,
+    payload: str,
+) -> tuple[httpx.Response | None, float]:
+    """Send one probe and return (response, elapsed_seconds)."""
+    method, url, kwargs = _build_probe_request(target, param, payload)
+    started = time.perf_counter()
+    try:
+        response = await client.request(method, url, **kwargs)
+    except httpx.RequestError:
+        return None, 0.0
+    elapsed = time.perf_counter() - started
+    return response, elapsed
+
+
 async def _check_xss(
-    client: httpx.AsyncClient, url: str, param: str
+    client: httpx.AsyncClient, target: AttackTarget, param: str
 ) -> list[Finding]:
     """
     Test *param* in *url* for reflected XSS.
@@ -149,10 +229,8 @@ async def _check_xss(
     findings: list[Finding] = []
 
     for payload, description in XSS_PAYLOADS:
-        test_url = _inject_param(url, param, payload)
-        try:
-            response = await client.get(test_url)
-        except httpx.RequestError:
+        response, _ = await _send_probe(client, target, param, payload)
+        if response is None:
             continue
 
         body = response.text
@@ -160,11 +238,14 @@ async def _check_xss(
         if payload.lower() in body.lower():
             findings.append(
                 Finding(
-                    url=url,
+                    url=target.url,
                     parameter=param,
                     vuln_type="XSS",
                     severity=Severity.high,
-                    detail=f"{description}: payload '{payload}' reflected in response.",
+                    detail=(
+                        f"{description}: payload reflected in response. "
+                        f"surface={target.content_type} method={target.method} source={target.source}."
+                    ),
                 )
             )
             # One confirmed finding per param is enough — stop testing more payloads
@@ -174,21 +255,23 @@ async def _check_xss(
 
 
 async def _check_sqli(
-    client: httpx.AsyncClient, url: str, param: str
+    client: httpx.AsyncClient, target: AttackTarget, param: str
 ) -> list[Finding]:
     """
     Test *param* in *url* for SQL injection via error-based detection.
 
     Strategy: inject payloads that commonly trigger DB error messages, then
-    look for those error strings in the response body.
+    look for those error strings in the response body. Also perform a basic
+    time-based check using common database delay functions.
     """
     findings: list[Finding] = []
 
+    # Baseline latency for this target/parameter pair.
+    _, baseline_elapsed = await _send_probe(client, target, param, "1")
+
     for payload, description in SQLI_PAYLOADS:
-        test_url = _inject_param(url, param, payload)
-        try:
-            response = await client.get(test_url)
-        except httpx.RequestError:
+        response, _ = await _send_probe(client, target, param, payload)
+        if response is None:
             continue
 
         body_lower = response.text.lower()
@@ -196,16 +279,39 @@ async def _check_sqli(
             if signature in body_lower:
                 findings.append(
                     Finding(
-                        url=url,
+                        url=target.url,
                         parameter=param,
                         vuln_type="SQLi",
                         severity=Severity.high,
                         detail=(
                             f"{description}: error signature '{signature}' "
-                            f"found in response after injecting payload '{payload}'."
+                            f"found after payload injection. "
+                            f"surface={target.content_type} method={target.method} source={target.source}."
                         ),
                     )
                 )
                 return findings  # Stop at first confirmed SQLi for this param
+
+    # Time-based SQLi check.
+    for payload, description, expected_delay in SQLI_TIME_PAYLOADS:
+        response, elapsed = await _send_probe(client, target, param, payload)
+        if response is None:
+            continue
+
+        if elapsed - baseline_elapsed >= min(expected_delay * 0.6, settings.sqli_time_threshold_seconds):
+            findings.append(
+                Finding(
+                    url=target.url,
+                    parameter=param,
+                    vuln_type="SQLi",
+                    severity=Severity.medium,
+                    detail=(
+                        f"{description}: potential time-based SQLi. "
+                        f"baseline={baseline_elapsed:.2f}s probe={elapsed:.2f}s "
+                        f"surface={target.content_type} method={target.method} source={target.source}."
+                    ),
+                )
+            )
+            return findings
 
     return findings
