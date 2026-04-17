@@ -91,10 +91,15 @@ async def _run_scan(scan_id: int) -> None:
 
         try:
             # Step 1: Crawl
-            crawl_result = await crawl(scan.target_url, depth=scan.depth)
+            crawl_result = await crawl(
+                scan.target_url,
+                depth=scan.depth,
+                include_api=True,
+                brute_force_api=settings.api_bruteforce_enabled,
+            )
 
-            # Step 2: Scan discovered parameters for vulnerabilities
-            findings = await scan_targets(crawl_result.params)
+            # Step 2: Scan discovered attack surfaces for vulnerabilities
+            findings = await scan_targets(crawl_result.targets)
 
             # Step 3: Persist findings
             for finding in findings:
