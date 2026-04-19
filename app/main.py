@@ -29,6 +29,14 @@ setup_logging()
 
 
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+TEMPLATES_DIR = BASE_DIR / "templates"
+PAGE_TEMPLATES = {
+    "/": "index.html",
+    "/login": "login.html",
+    "/register": "register.html",
+    "/dashboard": "dashboard.html",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +72,10 @@ app.add_middleware(
 )
 
 # Serve static files (CSS, JS)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Jinja2 templates
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 # ---------------------------------------------------------------------------
 # Register API routers
@@ -83,22 +91,26 @@ app.include_router(report.router)
 # ---------------------------------------------------------------------------
 
 
+def _render_page(request: Request, template_name: str) -> HTMLResponse:
+    return templates.TemplateResponse(template_name, {"request": request})
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def index(request: Request):
     """Landing page — redirects unauthenticated users to login."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return _render_page(request, PAGE_TEMPLATES["/"])
 
 
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return _render_page(request, PAGE_TEMPLATES["/login"])
 
 
 @app.get("/register", response_class=HTMLResponse, include_in_schema=False)
 async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
+    return _render_page(request, PAGE_TEMPLATES["/register"])
 
 
 @app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard_page(request: Request):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return _render_page(request, PAGE_TEMPLATES["/dashboard"])
