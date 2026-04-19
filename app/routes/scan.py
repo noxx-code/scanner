@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -27,6 +27,8 @@ from app.services.scanner import scan_targets
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 logger = logging.getLogger(__name__)
+MIN_SCAN_DEPTH = 1
+MAX_SCAN_DEPTH = 5
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +43,8 @@ class ScanRequest(BaseModel):
     @field_validator("depth")
     @classmethod
     def depth_range(cls, v: int) -> int:
-        if v < 1 or v > 5:
-            raise ValueError("Depth must be between 1 and 5.")
+        if v < MIN_SCAN_DEPTH or v > MAX_SCAN_DEPTH:
+            raise ValueError(f"Depth must be between {MIN_SCAN_DEPTH} and {MAX_SCAN_DEPTH}.")
         return v
 
 
@@ -65,7 +67,7 @@ class ScanOut(BaseModel):
     created_at: datetime
     completed_at: datetime | None
     error_message: str | None = None
-    vulnerabilities: list[VulnerabilityOut] = []
+    vulnerabilities: list[VulnerabilityOut] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -73,6 +75,36 @@ class ScanOut(BaseModel):
 # ---------------------------------------------------------------------------
 # Background task
 # ---------------------------------------------------------------------------
+
+
+def _build_scan_response(scan: Scan, vulnerabilities: list[VulnerabilityOut] | None = None) -> ScanOut:
+    return ScanOut(
+        id=scan.id,
+        target_url=scan.target_url,
+        depth=scan.depth,
+        status=scan.status,
+        created_at=scan.created_at,
+        completed_at=scan.completed_at,
+        error_message=scan.error_message,
+        vulnerabilities=vulnerabilities or [],
+    )
+
+
+def _persist_findings(db: AsyncSession, scan_id: int, findings) -> int:
+    count = 0
+    for finding in findings:
+        db.add(
+            Vulnerability(
+                scan_id=scan_id,
+                url=finding.url,
+                parameter=finding.parameter,
+                vuln_type=finding.vuln_type,
+                severity=finding.severity,
+                detail=finding.detail,
+            )
+        )
+        count += 1
+    return count
 
 
 async def _run_scan(scan_id: int) -> None:
@@ -87,13 +119,11 @@ async def _run_scan(scan_id: int) -> None:
         if scan is None:
             return
 
-        # Mark as running
         scan.status = ScanStatus.running
         await db.commit()
 
         try:
             logger.info("Scan job started", extra={"scan_id": scan.id, "target_url": scan.target_url})
-            # Step 1: Crawl
             crawl_result = await crawl(
                 scan.target_url,
                 depth=scan.depth,
@@ -102,29 +132,18 @@ async def _run_scan(scan_id: int) -> None:
                 scan_id=scan.id,
             )
 
-            # Step 2: Scan discovered attack surfaces for vulnerabilities
             findings = await scan_targets(
                 crawl_result.targets,
                 scan_id=scan.id,
                 target_url=scan.target_url,
             )
 
-            # Step 3: Persist findings
-            for finding in findings:
-                vuln = Vulnerability(
-                    scan_id=scan_id,
-                    url=finding.url,
-                    parameter=finding.parameter,
-                    vuln_type=finding.vuln_type,
-                    severity=finding.severity,
-                    detail=finding.detail,
-                )
-                db.add(vuln)
+            finding_count = _persist_findings(db, scan_id, findings)
 
             scan.status = ScanStatus.completed
             logger.info(
                 "Scan job completed",
-                extra={"scan_id": scan.id, "target_url": scan.target_url, "findings": len(findings)},
+                extra={"scan_id": scan.id, "target_url": scan.target_url, "findings": finding_count},
             )
         except Exception as exc:  # noqa: BLE001
             scan.status = ScanStatus.failed
@@ -163,17 +182,7 @@ async def start_scan(
 
     background_tasks.add_task(_run_scan, scan.id)
 
-    # Build response manually — no vulnerabilities yet for a brand-new scan
-    return ScanOut(
-        id=scan.id,
-        target_url=scan.target_url,
-        depth=scan.depth,
-        status=scan.status,
-        created_at=scan.created_at,
-        completed_at=scan.completed_at,
-        error_message=None,
-        vulnerabilities=[],
-    )
+    return _build_scan_response(scan)
 
 
 @router.get("/{scan_id}", response_model=ScanOut)
@@ -191,4 +200,10 @@ async def get_scan(
     scan = result.scalar_one_or_none()
     if scan is None or scan.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found.")
-    return scan
+    return _build_scan_response(
+        scan,
+        [
+            VulnerabilityOut.model_validate(vulnerability)
+            for vulnerability in scan.vulnerabilities
+        ],
+    )
