@@ -1,0 +1,16 @@
+secscan https://demo.testfire.net --depth 2 --threads 15 --rate-limit 4 --output all --name demo_scan
+
+=======================================================================
+Authorized testing only. Do not scan systems without explicit permission.
+This scanner performs non-destructive, light security checks.
+=======================================================================
+
+Scan completed
+Target: https://demo.testfire.net
+Pages discovered: 42
+Endpoints discovered: 76
+Fingerprints: 9
+Findings: 18
+JSON report: reports/demo_scan.json
+HTML report: reports/demo_scan.html
+CSV report: reports/demo_scan.csv

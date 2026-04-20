@@ -1,0 +1,50 @@
+{
+  "scan_metadata": {
+    "target": "https://demo.testfire.net",
+    "started_at": "2026-04-20T10:00:00+00:00",
+    "ended_at": "2026-04-20T10:00:24+00:00",
+    "duration_seconds": 24.0
+  },
+  "summary": {
+    "total": 3,
+    "high": 1,
+    "medium": 1,
+    "low": 1
+  },
+  "fingerprints": [
+    {
+      "category": "server",
+      "name": "server",
+      "version": "1.22.1",
+      "evidence": "server: nginx/1.22.1",
+      "vulnerable": false,
+      "advisory": null
+    }
+  ],
+  "findings": [
+    {
+      "url": "https://demo.testfire.net/search?q=test",
+      "issue_type": "Input Reflection (XSS Indicator)",
+      "severity": "Medium",
+      "evidence": "Payload reflected for parameter 'q'.",
+      "recommendation": "Apply context-aware output encoding and strict input validation.",
+      "check_name": "input_reflection_check"
+    },
+    {
+      "url": "https://demo.testfire.net/.env",
+      "issue_type": "Sensitive File/Directory Exposure",
+      "severity": "High",
+      "evidence": "Accessible path returned HTTP 200",
+      "recommendation": "Block public access to sensitive files/directories at server level.",
+      "check_name": "directory_exposure_check"
+    },
+    {
+      "url": "https://demo.testfire.net",
+      "issue_type": "Missing Security Headers",
+      "severity": "Low",
+      "evidence": "Missing headers: content-security-policy",
+      "recommendation": "Add recommended security headers with hardened values.",
+      "check_name": "headers_check"
+    }
+  ]
+}

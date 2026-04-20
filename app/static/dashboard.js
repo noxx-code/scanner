@@ -126,6 +126,10 @@ function renderScanRow(scan) {
     const detailBtn = `<button type="button" class="btn btn-sm btn-outline view-vulns-btn"
       data-scan-id="${scan.id}"
       data-target-url="${escHtml(scan.target_url)}">Details</button>`;
+    const exportJsonBtn = `<button type="button" class="btn btn-sm btn-outline export-json-btn"
+      data-scan-id="${scan.id}">JSON</button>`;
+    const exportHtmlBtn = `<button type="button" class="btn btn-sm btn-outline export-html-btn"
+      data-scan-id="${scan.id}">HTML</button>`;
     const deleteBtn = `<button type="button" class="btn btn-sm btn-danger delete-scan-btn"
       data-scan-id="${scan.id}">Delete</button>`;
   return `<tr>
@@ -136,7 +140,7 @@ function renderScanRow(scan) {
     <td>${badge}</td>
     <td>${created}</td>
     <td>${vulnCount > 0 ? `<span style="color:var(--danger);font-weight:700;">${vulnCount}</span>` : "0"}</td>
-    <td style="display:flex;gap:8px;flex-wrap:wrap;">${detailBtn}${deleteBtn}</td>
+    <td style="display:flex;gap:8px;flex-wrap:wrap;">${detailBtn}${exportJsonBtn}${exportHtmlBtn}${deleteBtn}</td>
   </tr>`;
 }
 
@@ -200,6 +204,20 @@ function setupTableActions() {
     const deleteBtn = target.closest(".delete-scan-btn");
     if (deleteBtn instanceof HTMLElement) {
       deleteScan(deleteBtn.dataset.scanId);
+      return;
+    }
+
+    const exportJsonBtn = target.closest(".export-json-btn");
+    if (exportJsonBtn instanceof HTMLElement) {
+      const scanId = exportJsonBtn.dataset.scanId;
+      window.open(`${API}/reports/${scanId}/json`, "_blank", "noopener");
+      return;
+    }
+
+    const exportHtmlBtn = target.closest(".export-html-btn");
+    if (exportHtmlBtn instanceof HTMLElement) {
+      const scanId = exportHtmlBtn.dataset.scanId;
+      window.open(`${API}/reports/${scanId}/html`, "_blank", "noopener");
     }
   });
 
@@ -235,6 +253,7 @@ document.getElementById("scan-form").addEventListener("submit", async (e) => {
   const body = {
     target_url: document.getElementById("target-url").value.trim(),
     depth: parseInt(document.getElementById("depth").value, 10),
+    respect_robots_txt: document.getElementById("respect-robots").value === "true",
   };
 
   try {

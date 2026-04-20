@@ -10,3 +10,5 @@ pydantic-settings==2.9.1
 python-multipart==0.0.22
 aiosqlite==0.21.0
 jinja2==3.1.6
+
+# secscan modular CLI scanner uses the same dependency set above (httpx + beautifulsoup4 + stdlib).

@@ -121,3 +121,37 @@ async def send_probe(
             await asyncio.sleep(delay)
 
     return None, 0.0
+
+
+async def send_request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    **kwargs,
+) -> httpx.Response | None:
+    """Send a generic scanner request with retry/backoff and shared rate limiting."""
+    max_attempts = max(1, settings.scanner_max_retries + 1)
+    method = method.upper()
+
+    for attempt in range(1, max_attempts + 1):
+        await _RATE_LIMITER.acquire()
+        try:
+            return await client.request(method, url, **kwargs)
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
+            if attempt >= max_attempts:
+                logger.warning(
+                    "Scanner request failed after retries",
+                    extra={
+                        **get_scan_context(),
+                        "url": url,
+                        "method": method,
+                        "attempt": attempt,
+                        "error": str(exc),
+                    },
+                )
+                return None
+
+            delay = settings.scanner_retry_backoff_seconds * (2 ** (attempt - 1))
+            await asyncio.sleep(delay)
+
+    return None

@@ -37,7 +37,7 @@ class ScanEngine:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(settings.scanner_timeout),
             follow_redirects=True,
-            headers={"User-Agent": "SecurityScanner/1.0 (educational use)"},
+            headers={"User-Agent": settings.scanner_user_agent},
         ) as client:
             tasks = [
                 self._scan_target_parameter(client, target, parameter)

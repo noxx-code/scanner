@@ -7,9 +7,34 @@ A minimal viable web application for basic security scanning, built with **FastA
 ## Features
 
 - **Authentication** — Register, login, logout with bcrypt password hashing and JWT tokens; brute-force protection (account locked after 5 failed attempts in 5 minutes)
-- **Web Crawler** — BFS crawler that discovers internal pages, query parameters, HTML forms, and common API endpoints up to a configurable depth (max 5)
-- **Vulnerability Scanner** — Tests GET/POST/query/form/JSON inputs for reflected XSS, SQLi error signatures, and basic time-based SQLi behavior
-- **Reporting Dashboard** — HTML/JS dashboard with scan history, vulnerability details modal, and one-click report deletion
+- **Web Crawler** — BFS crawler that discovers internal pages, query parameters, HTML forms, and common API endpoints up to a configurable depth (max 5), with robots.txt support (enabled by default, configurable per scan)
+- **Vulnerability Scanner** — Non-intrusive checks for reflected XSS, SQLi signatures/time heuristics, open redirects, directory listing exposure, missing security headers, insecure cookies, and technology/version disclosure
+- **Rate-Limited Scanning** — Request pacing and retry/backoff controls to reduce load on target systems
+- **Reporting Dashboard** — HTML/JS dashboard with scan history, vulnerability details modal, plus JSON and HTML export
+
+### Modular CLI Security Scanner (secscan)
+
+This repository now also includes a standalone modular scanner package for authorized web application testing:
+
+- `secscan/crawler` — BFS crawler with link/form/query/JS endpoint extraction, depth, duplicate filtering, domain scope, robots.txt support, and rate limiting
+- `secscan/fingerprint` — server/framework/library detection with version extraction and mock vulnerable-version matching
+- `secscan/scanner` — async queue-based scanner core with plugin execution
+- `secscan/checks` — plugin checks for OWASP-style findings (passive + light active)
+- `secscan/reporter` — JSON/HTML/CSV reporting with summary stats and severity filtering
+- `secscan/utils` — shared config, models, logging, HTTP, and session persistence for resume support
+
+Security checks implemented as plugins:
+
+- Headers check
+- SSL/TLS certificate check
+- Cookie security check
+- Input reflection check (XSS indicator)
+- SQL error exposure check
+- Open redirect check
+- Directory and file exposure check
+- Sensitive data exposure scan
+- JavaScript analysis
+- CORS misconfiguration check
 
 ---
 
@@ -80,6 +105,9 @@ Key settings (all have sensible defaults):
 | `API_BRUTEFORCE_ENABLED` | `true` | Enables basic API endpoint brute-force checks |
 | `SCAN_JSON_ENDPOINTS` | `true` | Enables JSON-body scanning for API targets |
 | `SQLI_TIME_THRESHOLD_SECONDS` | `2.5` | Threshold for time-based SQLi heuristics |
+| `CRAWL_RESPECT_ROBOTS_TXT` | `true` | Respect target robots.txt by default |
+| `CRAWL_REQUESTS_PER_SECOND` | `5.0` | Crawl request pacing |
+| `SCANNER_REQUESTS_PER_SECOND` | `8.0` | Scanner request pacing |
 
 ### 3. Run the application
 
@@ -96,6 +124,31 @@ python -m app.main
 Avoid running `python app/main.py`; that treats the file as a script and breaks package imports because the project root is not added to `sys.path`.
 
 Open your browser at **http://localhost:8000**
+
+### 4. Run the modular scanner CLI
+
+```bash
+python -m secscan https://example.com --depth 2 --threads 20 --rate-limit 5 --output all
+```
+
+CLI options:
+
+- `--depth`
+- `--threads`
+- `--output` (`json`, `html`, `csv`, `all`)
+- `--rate-limit`
+- `--allow-external`
+- `--ignore-robots`
+- `--save-session <name>`
+- `--resume <name>`
+
+Generated reports are written to `reports/` by default.
+
+Example run and sample outputs are included in:
+
+- `examples/sample_run.txt`
+- `examples/sample_report.json`
+- `examples/sample_report.html`
 
 ---
 
@@ -123,6 +176,8 @@ Open your browser at **http://localhost:8000**
 |---|---|---|---|
 | `GET` | `/reports` | Bearer | List all scans for the current user |
 | `GET` | `/reports/{id}` | Bearer | Full report for one scan |
+| `GET` | `/reports/{id}/json` | Bearer | Structured JSON report with summary, severity counts, and remediation |
+| `GET` | `/reports/{id}/html` | Bearer | Printable HTML report export |
 | `DELETE` | `/reports/{id}` | Bearer | Delete one scan report and related vulnerabilities |
 
 Interactive docs: **http://localhost:8000/docs**

@@ -16,6 +16,7 @@ from app.services.scanning import http_client as scan_http_client
 from app.services.scanning import Finding, ScanEngine
 from app.services.scanning.context import get_scan_context, reset_scan_context, set_scan_context
 from app.services.scanning.plugins import default_plugins
+from app.services.scanning.plugins import open_redirect as open_redirect_plugin_module
 from app.services.scanning.plugins import sqli as sqli_plugin_module
 from app.services.scanning.plugins import xss as xss_plugin_module
 
@@ -269,6 +270,7 @@ async def scan_targets(
 
     original_xss_send_probe = xss_plugin_module.send_probe
     original_sqli_send_probe = sqli_plugin_module.send_probe
+    original_open_redirect_send_probe = open_redirect_plugin_module.send_probe
 
     tokens = set_scan_context(scan_id=scan_id, target_url=target_url)
     logger.info(
@@ -281,6 +283,7 @@ async def scan_targets(
             # Patch plugin probe sender for this scan run only.
             xss_plugin_module.send_probe = controller.send_probe
             sqli_plugin_module.send_probe = controller.send_probe
+            open_redirect_plugin_module.send_probe = controller.send_probe
             findings = await engine.scan(normalised)
     except Exception as exc:  # noqa: BLE001
         logger.exception(
@@ -292,6 +295,7 @@ async def scan_targets(
     finally:
         xss_plugin_module.send_probe = original_xss_send_probe
         sqli_plugin_module.send_probe = original_sqli_send_probe
+        open_redirect_plugin_module.send_probe = original_open_redirect_send_probe
         reset_scan_context(tokens)
 
     logger.info(

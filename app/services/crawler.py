@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import asyncio
 import logging
 import re
+import time
+from urllib import robotparser
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
@@ -25,8 +27,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-REQUESTS_PER_SECOND = 5
-REQUEST_INTERVAL_SECONDS = 1.0 / REQUESTS_PER_SECOND
 SKIP_SCHEMES = ("mailto:", "javascript:", "tel:")
 STATIC_ASSET_EXTENSIONS = {
     ".jpg",
@@ -56,6 +56,40 @@ STATIC_ASSET_EXTENSIONS = {
 }
 
 
+class AsyncRateLimiter:
+    """Simple async rate limiter based on minimum interval pacing."""
+
+    def __init__(self, requests_per_second: float) -> None:
+        self._interval = 1.0 / requests_per_second if requests_per_second > 0 else 0.0
+        self._lock = asyncio.Lock()
+        self._next_allowed_at = 0.0
+
+    async def acquire(self) -> None:
+        if self._interval <= 0:
+            return
+        async with self._lock:
+            now = time.perf_counter()
+            wait_for = self._next_allowed_at - now
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
+                now = time.perf_counter()
+            self._next_allowed_at = now + self._interval
+
+
+class RobotsPolicy:
+    """robots.txt policy helper used by the crawler."""
+
+    def __init__(self, parser: robotparser.RobotFileParser | None, enabled: bool, user_agent: str) -> None:
+        self._parser = parser
+        self._enabled = enabled
+        self._user_agent = user_agent
+
+    def allows(self, url: str) -> bool:
+        if not self._enabled or self._parser is None:
+            return True
+        return self._parser.can_fetch(self._user_agent, url)
+
+
 @dataclass(frozen=True)
 class AttackTarget:
     """A structured input surface that can be fuzzed by the scanner."""
@@ -82,6 +116,7 @@ class CrawlResult:
 async def crawl(
     target_url: str,
     depth: int = settings.default_crawl_depth,
+    respect_robots_txt: bool = settings.crawl_respect_robots_txt,
     include_api: bool = True,
     brute_force_api: bool = False,
     api_paths: list[str] | None = None,
@@ -124,12 +159,22 @@ async def crawl(
             discovered_api_paths.update(_default_api_bruteforce_paths())
 
     timeout = httpx.Timeout(settings.crawl_timeout)
+    rate_limiter = AsyncRateLimiter(settings.crawl_requests_per_second)
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
         # Pretend to be a regular browser to avoid trivial bot-blocks
-        headers={"User-Agent": "SecurityScanner/1.0 (educational use)"},
+        headers={"User-Agent": settings.scanner_user_agent},
     ) as client:
+        robots_policy = await _load_robots_policy(
+            client=client,
+            start_url=normalized_start_url,
+            user_agent=settings.scanner_user_agent,
+            enabled=respect_robots_txt,
+            scan_id=scan_id,
+            target_url=target_url,
+        )
+
         while queue:
             url, current_depth = queue.popleft()
             queued.discard(url)
@@ -185,6 +230,30 @@ async def crawl(
                 )
                 continue
 
+            if not robots_policy.allows(url):
+                logger.debug(
+                    "Crawler skipped URL",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "url": url,
+                        "depth": current_depth,
+                        "reason": "blocked by robots.txt",
+                    },
+                )
+                continue
+
+            if len(result.pages) >= settings.crawl_max_pages:
+                logger.info(
+                    "Crawler reached max page cap",
+                    extra={
+                        "scan_id": scan_id,
+                        "target_url": target_url,
+                        "max_pages": settings.crawl_max_pages,
+                    },
+                )
+                break
+
             visited.add(url)
 
             result.pages.append(url)
@@ -212,7 +281,13 @@ async def crawl(
 
             # Fetch the page and extract child links
             try:
-                response = await _get_with_retries(client, url, scan_id=scan_id, target_url=target_url)
+                response = await _get_with_retries(
+                    client,
+                    url,
+                    scan_id=scan_id,
+                    target_url=target_url,
+                    rate_limiter=rate_limiter,
+                )
                 if 300 <= response.status_code < 400:
                     logger.debug(
                         "Crawler skipped URL",
@@ -326,6 +401,7 @@ async def _get_with_retries(
     url: str,
     scan_id: int | None,
     target_url: str,
+    rate_limiter: AsyncRateLimiter,
 ) -> httpx.Response:
     """GET with retry/backoff to avoid transient failures aborting crawl."""
     max_attempts = max(1, settings.crawl_max_retries + 1)
@@ -340,8 +416,7 @@ async def _get_with_retries(
             },
         )
         try:
-            # Fixed pacing keeps average rate around 5 requests/second.
-            await asyncio.sleep(REQUEST_INTERVAL_SECONDS)
+            await rate_limiter.acquire()
             response = await client.get(url)
             return response
         except (httpx.RequestError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
@@ -359,6 +434,49 @@ async def _get_with_retries(
                 raise
             delay = settings.crawl_retry_backoff_seconds * (2 ** (attempt - 1))
             await asyncio.sleep(delay)
+
+
+async def _load_robots_policy(
+    client: httpx.AsyncClient,
+    start_url: str,
+    user_agent: str,
+    enabled: bool,
+    scan_id: int | None,
+    target_url: str,
+) -> RobotsPolicy:
+    """Load robots.txt and build an allow/deny policy for crawling."""
+    if not enabled:
+        logger.info(
+            "Crawler robots.txt enforcement disabled",
+            extra={"scan_id": scan_id, "target_url": target_url},
+        )
+        return RobotsPolicy(parser=None, enabled=False, user_agent=user_agent)
+
+    parsed = urlparse(start_url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    rp = robotparser.RobotFileParser()
+    rp.set_url(robots_url)
+
+    try:
+        response = await client.get(robots_url)
+        if response.status_code >= 400:
+            logger.info(
+                "robots.txt not available; crawler continuing",
+                extra={"scan_id": scan_id, "target_url": target_url, "robots_url": robots_url},
+            )
+            return RobotsPolicy(parser=None, enabled=False, user_agent=user_agent)
+        rp.parse(response.text.splitlines())
+        logger.info(
+            "robots.txt loaded",
+            extra={"scan_id": scan_id, "target_url": target_url, "robots_url": robots_url},
+        )
+        return RobotsPolicy(parser=rp, enabled=True, user_agent=user_agent)
+    except (httpx.RequestError, httpx.TimeoutException):
+        logger.info(
+            "robots.txt fetch failed; crawler continuing",
+            extra={"scan_id": scan_id, "target_url": target_url, "robots_url": robots_url},
+        )
+        return RobotsPolicy(parser=None, enabled=False, user_agent=user_agent)
 
 
 def _extract_links(html: str, base_url: str, base_domain: str) -> list[str]:

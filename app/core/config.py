@@ -35,9 +35,12 @@ class Settings(BaseSettings):
 
     # Crawler defaults
     default_crawl_depth: int = 2
+    crawl_requests_per_second: float = 5.0
     crawl_timeout: int = 10  # seconds per HTTP request
     crawl_max_retries: int = 2
     crawl_retry_backoff_seconds: float = 0.4
+    crawl_respect_robots_txt: bool = True
+    crawl_max_pages: int = 300
     api_common_endpoints: str = (
         "/api,/rest,/search,/graphql,/api/search,/api/products,/api/users,/rest/products/search"
     )
@@ -46,6 +49,7 @@ class Settings(BaseSettings):
 
     # Scanner defaults
     scanner_timeout: int = 12
+    scanner_user_agent: str = "SecurityScanner/1.0 (authorized testing only)"
     scanner_max_retries: int = 2
     scanner_retry_backoff_seconds: float = 0.4
     scanner_requests_per_second: float = 8.0

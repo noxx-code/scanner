@@ -23,6 +23,7 @@ from app.models.scan import Scan, ScanStatus, Severity, Vulnerability
 from app.models.user import User
 from app.routes.dependencies import get_current_user
 from app.services.crawler import crawl
+from app.services.scanning.contracts import Finding
 from app.services.scanner import scan_targets
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -39,6 +40,7 @@ MAX_SCAN_DEPTH = 5
 class ScanRequest(BaseModel):
     target_url: HttpUrl
     depth: int = settings.default_crawl_depth
+    respect_robots_txt: bool = settings.crawl_respect_robots_txt
 
     @field_validator("depth")
     @classmethod
@@ -107,7 +109,7 @@ def _persist_findings(db: AsyncSession, scan_id: int, findings) -> int:
     return count
 
 
-async def _run_scan(scan_id: int) -> None:
+async def _run_scan(scan_id: int, respect_robots_txt: bool) -> None:
     """
     Execute crawl + vulnerability scan for *scan_id*.
 
@@ -127,16 +129,19 @@ async def _run_scan(scan_id: int) -> None:
             crawl_result = await crawl(
                 scan.target_url,
                 depth=scan.depth,
+                respect_robots_txt=respect_robots_txt,
                 include_api=True,
                 brute_force_api=settings.api_bruteforce_enabled,
                 scan_id=scan.id,
             )
 
+            injection_surface_findings = _build_injection_surface_findings(crawl_result.targets)
             findings = await scan_targets(
                 crawl_result.targets,
                 scan_id=scan.id,
                 target_url=scan.target_url,
             )
+            findings = injection_surface_findings + findings
 
             finding_count = _persist_findings(db, scan_id, findings)
 
@@ -156,6 +161,33 @@ async def _run_scan(scan_id: int) -> None:
 
         scan.completed_at = datetime.now(timezone.utc)
         await db.commit()
+
+
+def _build_injection_surface_findings(targets) -> list[Finding]:
+    """Record discovered input surfaces as low-severity findings for reporting."""
+    findings: list[Finding] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    for target in targets:
+        for param in target.params:
+            key = (target.url, target.method, target.content_type, param)
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append(
+                Finding(
+                    url=target.url,
+                    parameter=param,
+                    vuln_type="InjectionPoint",
+                    severity=Severity.low,
+                    detail=(
+                        "User-controlled input surface discovered "
+                        f"(method={target.method}, type={target.content_type}, source={target.source})."
+                    ),
+                )
+            )
+
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +212,7 @@ async def start_scan(
     await db.commit()
     await db.refresh(scan)
 
-    background_tasks.add_task(_run_scan, scan.id)
+    background_tasks.add_task(_run_scan, scan.id, payload.respect_robots_txt)
 
     return _build_scan_response(scan)
 
