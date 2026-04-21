@@ -1,0 +1,222 @@
+# ============================================================================
+# Default Nuclei Vulnerability Detection Templates
+# ============================================================================
+# These templates define common vulnerability patterns for web applications
+# Format: YAML-based configuration with HTTP requests and matchers
+# ============================================================================
+
+# Template 1: Information Disclosure - Debug Page
+id: info-disclosure
+name: Information Disclosure - Debug Page
+description: Detects debug pages or information disclosure endpoints
+severity: medium
+author: scanner
+
+requests:
+  - path: /debug
+    method: GET
+    matchers:
+      - keywords:
+          - debug
+          - stack trace
+          - error
+
+---
+# Template 2: Missing Security Headers
+id: missing-security-headers
+name: Missing Security Headers
+description: Detects missing HTTP security headers
+severity: medium
+author: scanner
+
+requests:
+  - path: /
+    method: GET
+    matchers:
+      - headers:
+          X-Frame-Options: missing
+          X-Content-Type-Options: missing
+
+---
+# Template 3: Known Vulnerabilities in Response
+id: known-vuln-response
+name: Known Vulnerability Detection
+description: Detects known vulnerability patterns in responses
+severity: high
+author: scanner
+
+requests:
+  - path: /
+    method: GET
+    matchers:
+      - keywords:
+          - "javax.servlet.ServletException"
+          - "java.lang.NullPointerException"
+          - "ORA-01017"
+
+---
+# Template 4: SQL Injection Indicators
+id: sql-injection-indicators
+name: SQL Injection Indicators
+description: Detects common SQL error messages indicating SQL injection
+severity: high
+author: scanner
+
+requests:
+  - path: /?id=1' OR '1'='1
+    method: GET
+    matchers:
+      - keywords:
+          - "SQL syntax"
+          - "mysql_fetch"
+          - "Warning: mysql"
+          - "supplied argument"
+
+---
+# Template 5: Open Redirect Vulnerability
+id: open-redirect
+name: Open Redirect
+description: Detects open redirect vulnerabilities
+severity: medium
+author: scanner
+
+requests:
+  - path: /?redirect=http://example.com
+    method: GET
+    matchers:
+      - regex:
+          - "Location: http://example\\.com"
+
+---
+# Template 6: Directory Listing Enabled
+id: directory-listing
+name: Directory Listing Enabled
+description: Detects enabled directory listing
+severity: medium
+author: scanner
+
+requests:
+  - path: /uploads
+    method: GET
+    matchers:
+      - keywords:
+          - "[To Parent Directory]"
+          - "Index of /"
+
+---
+# Template 7: Exposed Admin Panel Detection
+id: exposed-admin-panel
+name: Exposed Admin Panel
+description: Detects potentially exposed admin panels
+severity: high
+author: scanner
+
+requests:
+  - path: /admin
+    method: GET
+    matchers:
+      - status:
+          - 200
+  - path: /admin/login
+    method: GET
+    matchers:
+      - keywords:
+          - admin
+          - login
+          - password
+
+---
+# Template 8: Weak SSL/TLS Configuration
+id: weak-ssl-tls
+name: Weak SSL/TLS
+description: Detects weak SSL/TLS configurations
+severity: high
+author: scanner
+
+requests:
+  - path: /
+    method: GET
+    matchers:
+      - keywords:
+          - "SSLv2"
+          - "SSLv3"
+          - "TLSv1.0"
+
+---
+# Template 9: XSS Vulnerability Detection
+id: xss-detection
+name: Reflected XSS
+description: Detects reflected XSS vulnerabilities
+severity: high
+author: scanner
+
+requests:
+  - path: /?search=<script>alert('xss')</script>
+    method: GET
+    matchers:
+      - keywords:
+          - "<script>alert('xss')</script>"
+
+---
+# Template 10: CSRF Token Missing
+id: csrf-token-missing
+name: CSRF Token Missing
+description: Detects forms without CSRF tokens
+severity: medium
+author: scanner
+
+requests:
+  - path: /
+    method: GET
+    matchers:
+      - regex:
+          - "<form[^>]*method=['\"]POST['\"]"
+      - keywords:
+          - "csrf"
+          - "_token"
+        negate: true
+
+---
+# Template 11: Sensitive Data Exposure
+id: sensitive-data-exposure
+name: Sensitive Data Exposure
+description: Detects exposure of sensitive data patterns
+severity: high
+author: scanner
+
+requests:
+  - path: /
+    method: GET
+    matchers:
+      - keywords:
+          - "password"
+          - "api_key"
+          - "secret_key"
+          - "auth_token"
+          - "credit_card"
+
+---
+# Template 12: Configuration File Exposure
+id: config-exposure
+name: Configuration File Exposure
+description: Detects exposed configuration files
+severity: high
+author: scanner
+
+requests:
+  - path: /.env
+    method: GET
+    matchers:
+      - status:
+          - 200
+  - path: /web.config
+    method: GET
+    matchers:
+      - status:
+          - 200
+  - path: /config.php
+    method: GET
+    matchers:
+      - status:
+          - 200
+
