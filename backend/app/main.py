@@ -5,6 +5,7 @@ from pathlib import Path
 try:
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.staticfiles import StaticFiles
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
@@ -78,14 +79,21 @@ def create_app(config=None) -> FastAPI:
     except Exception as e:
         logger.debug(f"Report routes not available: {e}")
     
+    # Mount static files for frontend
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        logger.info("✓ Static files mounted")
+    
     # Health check endpoints
     @app.get("/")
     async def root():
-        """Root endpoint."""
+        """Root endpoint - redirect to frontend or return API info."""
         return {
             "message": config.API_TITLE,
             "version": config.API_VERSION,
-            "status": "operational"
+            "status": "operational",
+            "frontend": "/static/index.html"
         }
     
     @app.get("/health")
