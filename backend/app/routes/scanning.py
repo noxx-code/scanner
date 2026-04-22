@@ -41,7 +41,7 @@ if HAS_FASTAPI:
             logger.error(f"Error listing scanners: {e}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    @router.post("/run")
+    @router.get("/run")
     async def run_scan(
         target: str = Query(..., description="Target URL to scan (http:// or https://)"),
         scanner: Optional[str] = Query(None, description="Specific scanner to use (scanner1/scanner2/custom_scanner)"),
