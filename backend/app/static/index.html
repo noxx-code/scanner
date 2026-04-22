@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Scanner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px 30px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 0.95em;
+        }
+
+        input[type="url"],
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+
+        input[type="url"]:focus,
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        input::placeholder {
+            color: #999;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .info-box {
+            background: #f8f9ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 25px;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .status {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .status.show {
+            display: block;
+        }
+
+        .status.loading {
+            background: #e3f2fd;
+            border: 2px solid #2196f3;
+            color: #1565c0;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            border: 2px solid #4caf50;
+            color: #2e7d32;
+        }
+
+        .status.error {
+            background: #ffebee;
+            border: 2px solid #f44336;
+            color: #c62828;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(0, 0, 0, 0.2);
+            border-radius: 50%;
+            border-top-color: #2196f3;
+            animation: spin 0.8s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .results {
+            margin-top: 30px;
+        }
+
+        .results h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .result-card {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .scanner-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .scanner-name {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .scanner-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+
+        .status-success {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+
+        .status-error {
+            background: #ffcdd2;
+            color: #c62828;
+        }
+
+        .findings-count {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .target-info {
+            background: #f5f5f5;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .target-info label {
+            margin-bottom: 3px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .target-info .value {
+            color: #333;
+            word-break: break-all;
+            margin-top: 2px;
+        }
+
+        .summary-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            opacity: 0.9;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 30px;
+            font-size: 0.95em;
+        }
+
+        @media (max-width: 600px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+
+            .content {
+                padding: 25px;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .summary-stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Security Scanner</h1>
+            <p>Scan your web applications for vulnerabilities</p>
+        </div>
+
+        <div class="content">
+            <div class="info-box">
+                ℹ️ Enter a target URL to scan for security vulnerabilities. The scan will run all available scanners and report findings.
+            </div>
+
+            <form id="scanForm">
+                <div class="form-group">
+                    <label for="targetUrl">Target URL *</label>
+                    <input
+                        type="url"
+                        id="targetUrl"
+                        name="targetUrl"
+                        placeholder="https://example.com"
+                        required
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="scanner">Scanner (Optional)</label>
+                    <select id="scanner" name="scanner">
+                        <option value="">All Scanners</option>
+                        <option value="scanner1">Scanner 1 - Template Based</option>
+                        <option value="scanner2">Scanner 2 - Security Audit</option>
+                        <option value="custom_scanner">Custom Scanner - Input Validation</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="timeout">Timeout (seconds)</label>
+                    <input
+                        type="text"
+                        id="timeout"
+                        name="timeout"
+                        placeholder="30"
+                        value="30"
+                    >
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="btn-primary" id="scanBtn">Start Scan</button>
+                    <button type="button" class="btn-secondary" id="clearBtn">Clear</button>
+                </div>
+            </form>
+
+            <div id="status" class="status"></div>
+
+            <div id="results" class="results" style="display: none;">
+                <h2>Scan Results</h2>
+                <div id="resultsContent"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        const form = document.getElementById('scanForm');
+        const scanBtn = document.getElementById('scanBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const statusEl = document.getElementById('status');
+        const resultsEl = document.getElementById('results');
+        const resultsContent = document.getElementById('resultsContent');
+
+        clearBtn.addEventListener('click', () => {
+            form.reset();
+            statusEl.classList.remove('show');
+            resultsEl.style.display = 'none';
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const targetUrl = document.getElementById('targetUrl').value;
+            const scanner = document.getElementById('scanner').value;
+            const timeout = document.getElementById('timeout').value;
+
+            // Validate URL
+            try {
+                new URL(targetUrl);
+            } catch (err) {
+                showStatus('Invalid URL format', 'error');
+                return;
+            }
+
+            scanBtn.disabled = true;
+            showStatus('<span class="spinner"></span> Scanning in progress... This may take a moment.', 'loading');
+            resultsEl.style.display = 'none';
+
+            try {
+                const params = new URLSearchParams({
+                    target: targetUrl,
+                    timeout: timeout
+                });
+
+                if (scanner) {
+                    params.append('scanner', scanner);
+                }
+
+                const response = await fetch(`${API_BASE}/api/scan/run?${params}`, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Scan failed');
+                }
+
+                const data = await response.json();
+                displayResults(data, targetUrl);
+                showStatus('✓ Scan completed successfully!', 'success');
+            } catch (error) {
+                showStatus(`✗ Error: ${error.message}`, 'error');
+            } finally {
+                scanBtn.disabled = false;
+            }
+        });
+
+        function showStatus(message, type) {
+            statusEl.innerHTML = message;
+            statusEl.className = `status show ${type}`;
+        }
+
+        function displayResults(data, targetUrl) {
+            const isSingleScanner = data.scanner !== undefined;
+
+            if (isSingleScanner) {
+                displaySingleScannerResults(data);
+            } else {
+                displayMultiScannerResults(data);
+            }
+
+            resultsEl.style.display = 'block';
+            resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function displaySingleScannerResults(data) {
+            const html = `
+                <div class="target-info">
+                    <label>Target URL:</label>
+                    <div class="value">${escapeHtml(data.target)}</div>
+                </div>
+
+                <div class="target-info">
+                    <label>Scanner:</label>
+                    <div class="value">${escapeHtml(data.scanner)}</div>
+                </div>
+
+                <div class="summary-stats">
+                    <div class="stat-box">
+                        <div class="stat-number">${data.findings_count || 0}</div>
+                        <div class="stat-label">Findings</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number">${data.duration_seconds?.toFixed(2) || 0}s</div>
+                        <div class="stat-label">Duration</div>
+                    </div>
+                </div>
+
+                ${data.status === 'success'
+                    ? `<div class="result-card">
+                        <div class="scanner-info">
+                            <span class="scanner-name">${escapeHtml(data.scanner)}</span>
+                            <span class="scanner-status status-success">${data.status.toUpperCase()}</span>
+                        </div>
+                        <div class="findings-count">${data.findings_count || 0} finding(s)</div>
+                    </div>`
+                    : `<div class="result-card">
+                        <div class="scanner-info">
+                            <span class="scanner-name">${escapeHtml(data.scanner)}</span>
+                            <span class="scanner-status status-error">${data.status.toUpperCase()}</span>
+                        </div>
+                        <div class="findings-count">${escapeHtml(data.error || 'Unknown error')}</div>
+                    </div>`
+                }
+
+                ${data.findings && data.findings.length > 0
+                    ? `
+                    <div style="margin-top: 20px;">
+                        <h3 style="margin-bottom: 10px; color: #333;">Findings Details</h3>
+                        ${data.findings.map((finding, idx) => `
+                            <div class="result-card">
+                                <strong>${escapeHtml(finding.title || 'Finding')}</strong>
+                                <div style="color: #666; font-size: 0.9em; margin-top: 5px;">
+                                    Severity: <strong>${escapeHtml(finding.severity || 'unknown')}</strong>
+                                </div>
+                                ${finding.url ? `<div style="color: #666; font-size: 0.85em; margin-top: 5px; word-break: break-all;">URL: ${escapeHtml(finding.url)}</div>` : ''}
+                                ${finding.description ? `<div style="color: #555; font-size: 0.9em; margin-top: 8px;">${escapeHtml(finding.description)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                    `
+                    : ''
+                }
+            `;
+
+            resultsContent.innerHTML = html;
+        }
+
+        function displayMultiScannerResults(data) {
+            const high = data.severity_breakdown?.high || 0;
+            const medium = data.severity_breakdown?.medium || 0;
+            const low = data.severity_breakdown?.low || 0;
+
+            const html = `
+                <div class="target-info">
+                    <label>Target URL:</label>
+                    <div class="value">${escapeHtml(data.target)}</div>
+                </div>
+
+                <div class="summary-stats">
+                    <div class="stat-box">
+                        <div class="stat-number">${data.total_findings || 0}</div>
+                        <div class="stat-label">Total Findings</div>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);">
+                        <div class="stat-number">${high}</div>
+                        <div class="stat-label">High</div>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #ff9800 0%, #e65100 100%);">
+                        <div class="stat-number">${medium}</div>
+                        <div class="stat-label">Medium</div>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #2196f3 0%, #1565c0 100%);">
+                        <div class="stat-number">${low}</div>
+                        <div class="stat-label">Low</div>
+                    </div>
+                </div>
+
+                <h3 style="margin: 20px 0 15px 0; color: #333;">Scanner Results</h3>
+                ${(data.scanner_results || []).map(result => `
+                    <div class="result-card">
+                        <div class="scanner-info">
+                            <span class="scanner-name">${escapeHtml(result.scanner)}</span>
+                            <span class="scanner-status ${result.status === 'success' ? 'status-success' : 'status-error'}">
+                                ${result.status.toUpperCase()}
+                            </span>
+                        </div>
+                        <div class="findings-count">${result.findings_count || 0} finding(s) - ${result.duration_seconds?.toFixed(2) || 0}s</div>
+                        ${result.error ? `<div style="color: #c62828; font-size: 0.85em; margin-top: 5px;">Error: ${escapeHtml(result.error)}</div>` : ''}
+                    </div>
+                `).join('')}
+
+                ${data.unique_findings && data.unique_findings.length > 0
+                    ? `
+                    <div style="margin-top: 20px;">
+                        <h3 style="margin-bottom: 10px; color: #333;">Detailed Findings</h3>
+                        ${data.unique_findings.map((finding, idx) => `
+                            <div class="result-card">
+                                <strong>${escapeHtml(finding.title || 'Finding')}</strong>
+                                <div style="color: #666; font-size: 0.9em; margin-top: 5px;">
+                                    Severity: <strong>${escapeHtml(finding.severity || 'unknown')}</strong>
+                                </div>
+                                ${finding.url ? `<div style="color: #666; font-size: 0.85em; margin-top: 5px; word-break: break-all;">URL: ${escapeHtml(finding.url)}</div>` : ''}
+                                ${finding.description ? `<div style="color: #555; font-size: 0.9em; margin-top: 8px;">${escapeHtml(finding.description)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                    `
+                    : ''
+                }
+            `;
+
+            resultsContent.innerHTML = html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
